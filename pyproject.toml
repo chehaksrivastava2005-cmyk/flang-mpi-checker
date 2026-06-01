@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mpicheck"
+version = "0.1.0"
+description = "Flang-style MPI correctness checker for Fortran"
+requires-python = ">=3.10"
+dependencies = ["fparser>=0.2.0"]
+
+[project.scripts]
+mpicheck = "mpicheck.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["mpicheck*"]
