@@ -1,13 +1,14 @@
 <!DOCTYPE html>
-<html lang="en" data-bs-theme="light">
+<html lang="en">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>mpicheck Dashboard</title>
+    <title>mpicheck — Interactive MPI Correctness Dashboard</title>
+    <meta name="description" content="Interactive dashboard for mpicheck — a Flang-based MPI correctness checker for Fortran. Browse files, run analysis, and view diagnostics." />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
-      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap"
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700&display=swap"
       rel="stylesheet"
     />
     <link
@@ -20,202 +21,268 @@
     />
     <link rel="stylesheet" href="styles.css" />
   </head>
-  <body>
-    <nav class="navbar navbar-expand-lg sticky-top glass-panel">
-      <div class="container">
-        <a class="navbar-brand d-flex align-items-center gap-2" href="#">
-          <span class="brand-icon"><i class="fa-solid fa-microchip"></i></span>
-          <span>
-            <strong>mpicheck</strong>
-            <small>Flang-Based MPI Checker</small>
-          </span>
-        </a>
-        <button
-          class="navbar-toggler"
-          type="button"
-          data-bs-toggle="collapse"
-          data-bs-target="#navLinks"
-        >
-          <span class="navbar-toggler-icon"></span>
-        </button>
-        <div class="collapse navbar-collapse" id="navLinks">
-          <ul class="navbar-nav ms-auto mb-2 mb-lg-0">
-            <li class="nav-item"><a class="nav-link active" href="#dashboard">Dashboard</a></li>
-            <li class="nav-item"><a class="nav-link" href="#analysis">Analysis</a></li>
-            <li class="nav-item"><a class="nav-link" href="#reports">Reports</a></li>
-            <li class="nav-item"><a class="nav-link" href="#rules">Rules</a></li>
-            <li class="nav-item"><a class="nav-link" href="#docs">Documentation</a></li>
-          </ul>
-          <button id="themeToggle" class="btn btn-outline-primary ms-lg-3" type="button">
-            <i class="fa-solid fa-moon"></i>
-          </button>
+  <body data-theme="dark">
+
+    <!-- ═══════════════════════════════════════════════════════════ -->
+    <!-- SIDEBAR NAVIGATION                                         -->
+    <!-- ═══════════════════════════════════════════════════════════ -->
+    <nav class="sidebar" id="sidebar">
+      <div class="sidebar-brand">
+        <div class="brand-icon"><i class="fa-solid fa-microchip"></i></div>
+        <div class="brand-text">
+          <strong>mpicheck</strong>
+          <small>MPI Checker</small>
         </div>
+      </div>
+
+      <div class="sidebar-nav">
+        <a href="#" class="sidebar-link active" data-page="dashboard">
+          <i class="fa-solid fa-gauge-high"></i>
+          <span>Dashboard</span>
+        </a>
+        <a href="#" class="sidebar-link" data-page="workspace">
+          <i class="fa-solid fa-terminal"></i>
+          <span>Workspace</span>
+        </a>
+        <a href="#" class="sidebar-link" data-page="analysis">
+          <i class="fa-solid fa-magnifying-glass-chart"></i>
+          <span>Analysis</span>
+        </a>
+        <a href="#" class="sidebar-link" data-page="reports">
+          <i class="fa-solid fa-chart-pie"></i>
+          <span>Reports</span>
+        </a>
+        <a href="#" class="sidebar-link" data-page="rules">
+          <i class="fa-solid fa-shield-halved"></i>
+          <span>Rules</span>
+        </a>
+      </div>
+
+      <div class="sidebar-footer">
+        <button id="themeToggle" class="sidebar-link" title="Toggle theme">
+          <i class="fa-solid fa-moon"></i>
+          <span>Theme</span>
+        </button>
       </div>
     </nav>
 
-    <main id="dashboard">
-      <section class="hero-section">
-        <div class="container hero-grid">
-          <div class="hero-copy">
-            <p class="eyebrow">FLANG-BASED STATIC ANALYSIS</p>
-            <h1 id="projectTitle">mpicheck</h1>
-            <p id="heroSubtitle" class="lead"></p>
-            <div class="hero-actions">
-              <a href="#analysis" class="btn btn-primary btn-lg">
-                <i class="fa-solid fa-play"></i> Analyze File
-              </a>
-              <a href="#docs" class="btn btn-outline-secondary btn-lg">
-                <i class="fa-solid fa-book-open"></i> View Documentation
-              </a>
-            </div>
-            <div class="hero-badges">
-              <span class="badge-soft"><i class="fa-solid fa-shield-halved"></i> Zero False Positives</span>
-              <span class="badge-soft"><i class="fa-solid fa-sitemap"></i> 10 Static Rules</span>
-              <span class="badge-soft"><i class="fa-solid fa-flask"></i> NPB Evaluation</span>
-            </div>
-          </div>
-          <div class="hero-card glass-panel">
-            <h3>Project Snapshot</h3>
-            <ul>
-              <li><i class="fa-solid fa-check"></i> Fortran-aware semantic inspection</li>
-              <li><i class="fa-solid fa-check"></i> MPI misuse detection at compile time</li>
-              <li><i class="fa-solid fa-check"></i> Compiler-style diagnostics and reports</li>
-            </ul>
-          </div>
-        </div>
-      </section>
+    <!-- ═══════════════════════════════════════════════════════════ -->
+    <!-- MAIN CONTENT AREA                                          -->
+    <!-- ═══════════════════════════════════════════════════════════ -->
+    <main class="main-content" id="mainContent">
 
-      <section class="section">
-        <div class="container">
-          <div class="row g-4" id="statsGrid"></div>
-        </div>
-      </section>
-
-      <section class="section" id="rules">
-        <div class="container">
-          <div class="section-heading">
-            <div>
-              <p class="eyebrow">RULE SUMMARY</p>
-              <h2>Coverage Across Ten Correctness Rules</h2>
-            </div>
-            <p class="section-copy">Each rule targets a distinct MPI misuse pattern in Fortran code.</p>
-          </div>
-          <div class="row g-4" id="rulesGrid"></div>
-        </div>
-      </section>
-
-      <section class="section" id="analysis">
-        <div class="container">
-          <div class="section-heading">
-            <div>
-              <p class="eyebrow">ANALYSIS RESULTS</p>
-              <h2>Latest Findings</h2>
-            </div>
-            <p class="section-copy">A professional report view of issues surfaced by the checker.</p>
-          </div>
-          <div class="glass-panel table-wrapper">
-            <table class="table align-middle mb-0">
-              <thead>
-                <tr>
-                  <th>File</th>
-                  <th>Line</th>
-                  <th>MPI Function</th>
-                  <th>Rule</th>
-                  <th>Severity</th>
-                  <th>Description</th>
-                </tr>
-              </thead>
-              <tbody id="resultsBody"></tbody>
-            </table>
-          </div>
-        </div>
-      </section>
-
-      <section class="section" id="reports">
-        <div class="container">
-          <div class="section-heading">
-            <div>
-              <p class="eyebrow">VISUAL REPORTS</p>
-              <h2>Interactive Charts and Metrics</h2>
-            </div>
-          </div>
-          <div class="row g-4">
-            <div class="col-lg-6">
-              <div class="glass-panel chart-card">
-                <h3>Errors vs Warnings</h3>
-                <canvas id="errorsChart"></canvas>
+      <!-- ────────────────────────────────────────────────────── -->
+      <!-- PAGE 1: DASHBOARD                                      -->
+      <!-- ────────────────────────────────────────────────────── -->
+      <section class="page active" id="page-dashboard">
+        <!-- Hero -->
+        <div class="hero">
+          <div class="hero-bg-glow"></div>
+          <div class="hero-content">
+            <div class="hero-text">
+              <span class="eyebrow"><i class="fa-solid fa-bolt"></i> FLANG-BASED STATIC ANALYSIS</span>
+              <h1 id="projectTitle">mpicheck</h1>
+              <p id="heroSubtitle" class="hero-subtitle">Static Analysis Tool for MPI Correctness in Fortran</p>
+              <div class="hero-actions">
+                <button class="btn-hero-primary" data-navigate="workspace">
+                  <i class="fa-solid fa-play"></i> Open Workspace
+                </button>
+                <button class="btn-hero-secondary" data-navigate="analysis">
+                  <i class="fa-solid fa-magnifying-glass"></i> View Analysis
+                </button>
+              </div>
+              <div class="hero-badges">
+                <span class="hero-badge"><i class="fa-solid fa-shield-halved"></i> Zero False Positives</span>
+                <span class="hero-badge"><i class="fa-solid fa-sitemap"></i> 10 Static Rules</span>
+                <span class="hero-badge"><i class="fa-solid fa-flask"></i> NPB Evaluated</span>
               </div>
             </div>
-            <div class="col-lg-6">
-              <div class="glass-panel chart-card">
-                <h3>Rule-wise Detection Count</h3>
-                <canvas id="rulesChart"></canvas>
-              </div>
-            </div>
-            <div class="col-lg-6">
-              <div class="glass-panel chart-card">
-                <h3>Analysis Time Trend</h3>
-                <canvas id="lineChart"></canvas>
-              </div>
-            </div>
-            <div class="col-lg-6">
-              <div class="glass-panel chart-card">
-                <h3>MPI Call Distribution</h3>
-                <canvas id="doughnutChart"></canvas>
-              </div>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      <section class="section">
-        <div class="container">
-          <div class="section-heading">
-            <div>
-              <p class="eyebrow">PROJECT WORKFLOW</p>
-              <h2>From Source to Diagnostics</h2>
-            </div>
-          </div>
-          <div class="workflow-grid" id="workflowGrid"></div>
-        </div>
-      </section>
-
-      <section class="section">
-        <div class="container">
-          <div class="row g-4 align-items-stretch">
-            <div class="col-lg-6">
-              <div class="glass-panel evaluation-card">
-                <h3>Evaluation Highlights</h3>
-                <div id="evaluationGrid" class="evaluation-grid"></div>
-              </div>
-            </div>
-            <div class="col-lg-6">
-              <div class="glass-panel diagnostics-panel">
-                <div class="panel-header">
-                  <h3>Recent Diagnostics</h3>
-                  <span class="chip">Compiler-style output</span>
+            <div class="hero-snapshot card-glass">
+              <div class="snapshot-header">
+                <div class="snapshot-dots">
+                  <span class="dot red"></span><span class="dot yellow"></span><span class="dot green"></span>
                 </div>
-                <div id="diagnosticsList" class="diagnostics-list"></div>
+                <span class="snapshot-title">project_snapshot.json</span>
+              </div>
+              <div class="snapshot-body">
+                <div class="snapshot-line"><span class="syn-key">"engine"</span>: <span class="syn-str">"Flang Semantic AST"</span>,</div>
+                <div class="snapshot-line"><span class="syn-key">"language"</span>: <span class="syn-str">"Fortran 90/95/2003"</span>,</div>
+                <div class="snapshot-line"><span class="syn-key">"rules"</span>: <span class="syn-num">10</span>,</div>
+                <div class="snapshot-line"><span class="syn-key">"test_pass_rate"</span>: <span class="syn-str">"50/50 (100%)"</span>,</div>
+                <div class="snapshot-line"><span class="syn-key">"false_positives"</span>: <span class="syn-num">0</span>,</div>
+                <div class="snapshot-line"><span class="syn-key">"output"</span>: <span class="syn-str">"compiler-style diagnostics"</span></div>
               </div>
             </div>
           </div>
         </div>
-      </section>
-    </main>
 
-    <footer class="footer" id="docs">
-      <div class="container footer-content">
-        <div>
-          <h5>Flang-Based MPI Correctness Checker for Fortran</h5>
-          <p>LLVM • Flang • Python • MPI</p>
+        <!-- Stats row -->
+        <div class="stats-row" id="statsGrid"></div>
+
+        <!-- Workflow -->
+        <div class="section-block">
+          <div class="section-title">
+            <span class="eyebrow">PIPELINE</span>
+            <h2>From Source to Diagnostics</h2>
+          </div>
+          <div class="workflow-strip" id="workflowGrid"></div>
         </div>
-        <div class="footer-links">
-          <a href="#dashboard">Dashboard</a>
-          <a href="#rules">Rules</a>
-          <a href="#docs">Documentation</a>
+
+        <!-- Evaluation + Recent diagnostics -->
+        <div class="dual-grid">
+          <div class="card-glass eval-card">
+            <h3><i class="fa-solid fa-trophy"></i> Evaluation Highlights</h3>
+            <div class="eval-grid" id="evaluationGrid"></div>
+          </div>
+          <div class="card-glass diag-card">
+            <div class="diag-header">
+              <h3><i class="fa-solid fa-terminal"></i> Recent Diagnostics</h3>
+              <span class="chip">Live</span>
+            </div>
+            <div class="diag-list" id="diagnosticsList"></div>
+          </div>
         </div>
-      </div>
-    </footer>
+      </section>
+
+      <!-- ────────────────────────────────────────────────────── -->
+      <!-- PAGE 2: WORKSPACE                                      -->
+      <!-- ────────────────────────────────────────────────────── -->
+      <section class="page" id="page-workspace">
+        <div class="page-header">
+          <div>
+            <span class="eyebrow">INTERACTIVE WORKSPACE</span>
+            <h2>Browse, Inspect &amp; Analyze</h2>
+          </div>
+          <div class="page-header-actions">
+            <button id="btnRunFile" class="btn-action primary" disabled>
+              <i class="fa-solid fa-play"></i> Run Analysis
+            </button>
+            <button id="btnRunTests" class="btn-action secondary">
+              <i class="fa-solid fa-flask"></i> Run All Tests
+            </button>
+            <button id="btnClearTerminal" class="btn-action ghost">
+              <i class="fa-solid fa-eraser"></i> Clear
+            </button>
+          </div>
+        </div>
+
+        <div class="workspace-container">
+          <!-- File Explorer -->
+          <aside class="ws-explorer" id="fileExplorer">
+            <div class="ws-panel-header">
+              <span><i class="fa-solid fa-folder-tree"></i> Explorer</span>
+              <button id="btnRefreshFiles" class="ws-icon-btn" title="Refresh">
+                <i class="fa-solid fa-arrows-rotate"></i>
+              </button>
+            </div>
+            <div class="ws-file-tree" id="fileTree">
+              <div class="ws-loading"><i class="fa-solid fa-spinner fa-spin"></i> Loading...</div>
+            </div>
+          </aside>
+
+          <!-- Code Viewer -->
+          <div class="ws-editor" id="codeViewer">
+            <div class="ws-panel-header">
+              <span id="editorFileName"><i class="fa-solid fa-code"></i> Select a file</span>
+              <span id="editorFileInfo" class="ws-file-info"></span>
+            </div>
+            <div class="ws-code-area" id="codeArea">
+              <div class="ws-placeholder">
+                <i class="fa-solid fa-file-code"></i>
+                <p>Click a file in the explorer to view its source code</p>
+              </div>
+            </div>
+          </div>
+
+          <!-- Terminal -->
+          <div class="ws-terminal" id="terminalPanel">
+            <div class="ws-panel-header">
+              <span><i class="fa-solid fa-terminal"></i> Terminal</span>
+              <span id="terminalStatus" class="ws-terminal-status"></span>
+            </div>
+            <pre class="ws-terminal-output" id="terminalOutput">Welcome to mpicheck interactive workspace.
+Select a file and click "Run Analysis" or "Run All Tests" to begin.
+</pre>
+          </div>
+        </div>
+      </section>
+
+      <!-- ────────────────────────────────────────────────────── -->
+      <!-- PAGE 3: ANALYSIS                                       -->
+      <!-- ────────────────────────────────────────────────────── -->
+      <section class="page" id="page-analysis">
+        <div class="page-header">
+          <div>
+            <span class="eyebrow">ANALYSIS RESULTS</span>
+            <h2>Latest Findings</h2>
+          </div>
+          <p class="page-header-desc">Click any row to open the file in the Workspace and highlight the relevant line.</p>
+        </div>
+
+        <div class="card-glass table-card">
+          <table class="results-table">
+            <thead>
+              <tr>
+                <th>File</th>
+                <th>Line</th>
+                <th>MPI Function</th>
+                <th>Rule</th>
+                <th>Severity</th>
+                <th>Description</th>
+              </tr>
+            </thead>
+            <tbody id="resultsBody"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- ────────────────────────────────────────────────────── -->
+      <!-- PAGE 4: REPORTS                                        -->
+      <!-- ────────────────────────────────────────────────────── -->
+      <section class="page" id="page-reports">
+        <div class="page-header">
+          <div>
+            <span class="eyebrow">VISUAL REPORTS</span>
+            <h2>Interactive Charts &amp; Metrics</h2>
+          </div>
+        </div>
+
+        <div class="charts-grid">
+          <div class="card-glass chart-cell">
+            <h3><i class="fa-solid fa-circle-half-stroke"></i> Errors vs Warnings</h3>
+            <canvas id="errorsChart"></canvas>
+          </div>
+          <div class="card-glass chart-cell">
+            <h3><i class="fa-solid fa-chart-bar"></i> Rule-wise Detection Count</h3>
+            <canvas id="rulesChart"></canvas>
+          </div>
+          <div class="card-glass chart-cell">
+            <h3><i class="fa-solid fa-chart-line"></i> Analysis Time Trend</h3>
+            <canvas id="lineChart"></canvas>
+          </div>
+          <div class="card-glass chart-cell">
+            <h3><i class="fa-solid fa-chart-pie"></i> MPI Call Distribution</h3>
+            <canvas id="doughnutChart"></canvas>
+          </div>
+        </div>
+      </section>
+
+      <!-- ────────────────────────────────────────────────────── -->
+      <!-- PAGE 5: RULES                                          -->
+      <!-- ────────────────────────────────────────────────────── -->
+      <section class="page" id="page-rules">
+        <div class="page-header">
+          <div>
+            <span class="eyebrow">RULE CATALOGUE</span>
+            <h2>Ten Correctness Rules</h2>
+          </div>
+          <p class="page-header-desc">Each rule targets a distinct MPI misuse pattern in Fortran code.</p>
+        </div>
+
+        <div class="rules-grid" id="rulesGrid"></div>
+      </section>
+
+    </main>
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
