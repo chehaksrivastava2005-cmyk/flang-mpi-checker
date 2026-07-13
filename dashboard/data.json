@@ -1,0 +1,56 @@
+{
+  "project": {
+    "title": "mpicheck",
+    "subtitle": "Static Analysis Tool for MPI Correctness in Fortran"
+  },
+  "stats": [
+    { "label": "Files Scanned", "value": 38, "icon": "fa-solid fa-file-lines" },
+    { "label": "MPI Calls Detected", "value": 142, "icon": "fa-solid fa-network-wired" },
+    { "label": "Errors Found", "value": 14, "icon": "fa-solid fa-circle-exclamation" },
+    { "label": "Warnings Found", "value": 6, "icon": "fa-solid fa-triangle-exclamation" },
+    { "label": "Rules Triggered", "value": 8, "icon": "fa-solid fa-list-check" },
+    { "label": "Analysis Time", "value": 0.27, "suffix": "s", "decimals": 2, "icon": "fa-solid fa-stopwatch" }
+  ],
+  "rules": [
+    { "name": "Buffer Size", "description": "Detects count mismatches and oversized buffers.", "category": "Core", "detections": 5, "statusIcon": "fa-solid fa-circle-check", "statusClass": "status-ok" },
+    { "name": "Contiguity", "description": "Flags non-contiguous array sections and assumed-shape access.", "category": "Safety", "detections": 3, "statusIcon": "fa-solid fa-circle-exclamation", "statusClass": "status-error" },
+    { "name": "Datatype Mismatch", "description": "Checks Fortran kind compatibility against MPI datatypes.", "category": "Type", "detections": 4, "statusIcon": "fa-solid fa-circle-check", "statusClass": "status-ok" },
+    { "name": "Derived Type Layout", "description": "Reports derived types without BIND(C) layout compatibility.", "category": "Layout", "detections": 2, "statusIcon": "fa-solid fa-triangle-exclamation", "statusClass": "status-warn" },
+    { "name": "Optional Argument", "description": "Catches optional args forwarded without PRESENT guards.", "category": "Semantics", "detections": 1, "statusIcon": "fa-solid fa-circle-exclamation", "statusClass": "status-error" },
+    { "name": "Collective Ordering", "description": "Finds collectives inside rank-dependent branches.", "category": "Concurrency", "detections": 2, "statusIcon": "fa-solid fa-circle-check", "statusClass": "status-ok" },
+    { "name": "Isend Aliasing", "description": "Detects overlapping buffers between MPI_Isend and MPI_Wait.", "category": "Race", "detections": 1, "statusIcon": "fa-solid fa-circle-exclamation", "statusClass": "status-error" },
+    { "name": "Handle Leak", "description": "Flags MPI handles not released before scope exit.", "category": "Resource", "detections": 2, "statusIcon": "fa-solid fa-triangle-exclamation", "statusClass": "status-warn" },
+    { "name": "Datatype State", "description": "Finds committed or freed datatype misuse.", "category": "State", "detections": 1, "statusIcon": "fa-solid fa-circle-exclamation", "statusClass": "status-error" },
+    { "name": "Deadlock Pattern", "description": "Highlights send-receive ordering hazards.", "category": "Deadlock", "detections": 1, "statusIcon": "fa-solid fa-triangle-exclamation", "statusClass": "status-warn" }
+  ],
+  "diagnostics": [
+    { "file": "tests/bugs/20_combo.f90", "line": 13, "mpiFunction": "MPI_Send", "rule": "datatype-mismatch", "severity": "Error", "description": "Buffer is REAL(8) but MPI datatype is MPI_REAL." },
+    { "file": "tests/bugs/01_count_overflow.f90", "line": 8, "mpiFunction": "MPI_Recv", "rule": "buffer-size", "severity": "Warning", "description": "Count exceeds static extent of the receiving buffer." },
+    { "file": "tests/bugs/18_pointer_no_contiguous.f90", "line": 11, "mpiFunction": "MPI_Bcast", "rule": "contiguity", "severity": "Error", "description": "Assumed-shape array lacks CONTIGUOUS attribute." }
+  ],
+  "charts": {
+    "errors": { "labels": ["Errors", "Warnings"], "data": [14, 6] },
+    "rules": { "labels": ["Buffer", "Contig.", "Datatype", "Derived", "Optional", "Collective", "Isend", "Handle", "State", "Deadlock"], "data": [5, 3, 4, 2, 1, 2, 1, 2, 1, 1] },
+    "timeline": { "labels": ["Jan", "Feb", "Mar", "Apr", "May", "Jun"], "data": [0.24, 0.22, 0.21, 0.23, 0.19, 0.18] },
+    "mpicalls": { "labels": ["MPI_Send", "MPI_Recv", "MPI_Bcast", "MPI_Isend", "MPI_Wait", "Others"], "data": [22, 18, 14, 11, 9, 26] }
+  },
+  "workflow": [
+    { "title": "Fortran Source", "description": "Input .f90 files", "icon": "fa-solid fa-file-code" },
+    { "title": "Flang Semantic Analysis", "description": "Fortran-aware AST pass", "icon": "fa-solid fa-magnifying-glass" },
+    { "title": "Metadata Extraction", "description": "Type, shape, and layout data", "icon": "fa-solid fa-database" },
+    { "title": "Python Rule Engine", "description": "Modular correctness checks", "icon": "fa-solid fa-gears" },
+    { "title": "Diagnostics", "description": "Compiler-style findings", "icon": "fa-solid fa-bug" },
+    { "title": "Reports", "description": "Charts and summaries", "icon": "fa-solid fa-chart-column" }
+  ],
+  "evaluation": [
+    { "label": "Test Cases Passed", "value": "50/50" },
+    { "label": "False Positives", "value": "0" },
+    { "label": "Diagnostics on NPB", "value": "17" },
+    { "label": "Static Analysis Rules", "value": "10" }
+  ],
+  "recentDiagnostics": [
+    { "message": "src/solver.f90:42: error: [datatype-mismatch] MPI_Send uses MPI_REAL with REAL(8) buffer", "file": "src/solver.f90", "line": 42, "rule": "datatype-mismatch" },
+    { "message": "src/solver.f90:51: warning: [handle-leak] MPI_Datatype not freed before scope exit", "file": "src/solver.f90", "line": 51, "rule": "handle-leak" },
+    { "message": "src/mesh.f90:19: error: [contiguity] non-unit stride section passed to MPI_Bcast", "file": "src/mesh.f90", "line": 19, "rule": "contiguity" }
+  ]
+}
