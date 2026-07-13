@@ -235,3 +235,5 @@ mpicheck --json tests/bugs/04_datatype_kind_mismatch.f90
 python eval/npb_runner.py eval/synthetic_npb_corpus
 # 17 diagnostics across 6 files
 ```
+ 
+ 
