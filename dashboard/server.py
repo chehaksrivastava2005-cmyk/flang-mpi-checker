@@ -3,7 +3,7 @@
 Interactive mpicheck dashboard server.
 
 Serves the static dashboard AND exposes API endpoints so the browser
-can browse files, read source code, and run mpicheck analysis.
+can browse files, read source code, create/edit files, and run mpicheck analysis.
 
 Usage:
     python dashboard/server.py          # from project root
@@ -13,6 +13,7 @@ Usage:
 import http.server
 import json
 import os
+import re
 import subprocess
 import sys
 import urllib.parse
@@ -24,8 +25,13 @@ from pathlib import Path
 DASHBOARD_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = DASHBOARD_DIR.parent
 
+# User workspace for creating new files
+WORKSPACE_DIR = PROJECT_ROOT / "workspace"
+WORKSPACE_DIR.mkdir(exist_ok=True)
+
 # Directories the browser is allowed to explore
 BROWSABLE_DIRS = [
+    WORKSPACE_DIR,
     PROJECT_ROOT / "tests" / "bugs",
     PROJECT_ROOT / "tests" / "clean",
     PROJECT_ROOT / "eval" / "synthetic_npb_corpus",
@@ -100,6 +106,12 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
             self._handle_run(body)
         elif parsed.path == "/api/run-tests":
             self._handle_run_tests()
+        elif parsed.path == "/api/save-file":
+            self._handle_save_file(body)
+        elif parsed.path == "/api/create-file":
+            self._handle_create_file(body)
+        elif parsed.path == "/api/delete-file":
+            self._handle_delete_file(body)
         else:
             self._json_response(404, {"error": "Not found"})
 
@@ -122,6 +134,7 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
                 "path": rel_path,
                 "name": target.name,
                 "content": content,
+                "editable": str(WORKSPACE_DIR.resolve()) in str(target.resolve()),
             })
         except Exception as exc:
             self._json_response(500, {"error": str(exc)})
@@ -181,6 +194,88 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
         except Exception as exc:
             self._json_response(500, {"error": str(exc)})
 
+    def _handle_save_file(self, body):
+        """Save content to an existing file (only workspace/ files)."""
+        try:
+            payload = json.loads(body) if body else {}
+        except json.JSONDecodeError:
+            self._json_response(400, {"error": "Invalid JSON"})
+            return
+
+        rel_path = payload.get("path")
+        content = payload.get("content")
+        if not rel_path or content is None:
+            self._json_response(400, {"error": "Missing 'path' or 'content'"})
+            return
+
+        target = (PROJECT_ROOT / rel_path).resolve()
+        # Only allow saving to workspace/ directory
+        if not str(target).startswith(str(WORKSPACE_DIR.resolve())):
+            self._json_response(403, {"error": "Can only edit files in workspace/"})
+            return
+
+        try:
+            target.write_text(content, encoding="utf-8")
+            self._json_response(200, {"ok": True, "path": rel_path})
+        except Exception as exc:
+            self._json_response(500, {"error": str(exc)})
+
+    def _handle_create_file(self, body):
+        """Create a new file in workspace/."""
+        try:
+            payload = json.loads(body) if body else {}
+        except json.JSONDecodeError:
+            self._json_response(400, {"error": "Invalid JSON"})
+            return
+
+        name = payload.get("name", "").strip()
+        content = payload.get("content", "")
+
+        if not name:
+            self._json_response(400, {"error": "Missing 'name'"})
+            return
+
+        # Sanitize filename
+        name = re.sub(r'[^\w.\-]', '_', name)
+        if not name.endswith(".f90"):
+            name += ".f90"
+
+        target = WORKSPACE_DIR / name
+        if target.exists():
+            self._json_response(409, {"error": f"File '{name}' already exists"})
+            return
+
+        try:
+            target.write_text(content, encoding="utf-8")
+            rel = str(target.relative_to(PROJECT_ROOT)).replace("\\", "/")
+            self._json_response(201, {"ok": True, "path": rel, "name": name})
+        except Exception as exc:
+            self._json_response(500, {"error": str(exc)})
+
+    def _handle_delete_file(self, body):
+        """Delete a file from workspace/."""
+        try:
+            payload = json.loads(body) if body else {}
+        except json.JSONDecodeError:
+            self._json_response(400, {"error": "Invalid JSON"})
+            return
+
+        rel_path = payload.get("path")
+        if not rel_path:
+            self._json_response(400, {"error": "Missing 'path'"})
+            return
+
+        target = (PROJECT_ROOT / rel_path).resolve()
+        if not str(target).startswith(str(WORKSPACE_DIR.resolve())):
+            self._json_response(403, {"error": "Can only delete workspace/ files"})
+            return
+
+        try:
+            target.unlink(missing_ok=True)
+            self._json_response(200, {"ok": True})
+        except Exception as exc:
+            self._json_response(500, {"error": str(exc)})
+
     # -- helpers ------------------------------------------------------------
 
     def _json_response(self, code, obj):
@@ -205,6 +300,7 @@ def main():
     server = http.server.HTTPServer(("", port), DashboardHandler)
     print(f"  mpicheck dashboard -> http://localhost:{port}")
     print(f"  Project root: {PROJECT_ROOT}")
+    print(f"  Workspace: {WORKSPACE_DIR}")
     print(f"  Press Ctrl+C to stop\n")
     try:
         server.serve_forever()

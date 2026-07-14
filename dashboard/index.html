@@ -154,8 +154,20 @@
             <h2>Browse, Inspect &amp; Analyze</h2>
           </div>
           <div class="page-header-actions">
+            <button id="btnNewFile" class="btn-action ghost">
+              <i class="fa-solid fa-file-circle-plus"></i> New File
+            </button>
+            <button id="btnEditMode" class="btn-action ghost" disabled>
+              <i class="fa-solid fa-pen"></i> Edit
+            </button>
+            <button id="btnSaveFile" class="btn-action ghost" style="display:none">
+              <i class="fa-solid fa-floppy-disk"></i> Save
+            </button>
             <button id="btnRunFile" class="btn-action primary" disabled>
               <i class="fa-solid fa-play"></i> Run Analysis
+            </button>
+            <button id="btnAutoFix" class="btn-action secondary" style="display:none">
+              <i class="fa-solid fa-wand-magic-sparkles"></i> Auto-Fix
             </button>
             <button id="btnRunTests" class="btn-action secondary">
               <i class="fa-solid fa-flask"></i> Run All Tests
@@ -171,16 +183,18 @@
           <aside class="ws-explorer" id="fileExplorer">
             <div class="ws-panel-header">
               <span><i class="fa-solid fa-folder-tree"></i> Explorer</span>
-              <button id="btnRefreshFiles" class="ws-icon-btn" title="Refresh">
-                <i class="fa-solid fa-arrows-rotate"></i>
-              </button>
+              <div style="display:flex;gap:0.3rem">
+                <button id="btnRefreshFiles" class="ws-icon-btn" title="Refresh">
+                  <i class="fa-solid fa-arrows-rotate"></i>
+                </button>
+              </div>
             </div>
             <div class="ws-file-tree" id="fileTree">
               <div class="ws-loading"><i class="fa-solid fa-spinner fa-spin"></i> Loading...</div>
             </div>
           </aside>
 
-          <!-- Code Viewer -->
+          <!-- Code Viewer / Editor -->
           <div class="ws-editor" id="codeViewer">
             <div class="ws-panel-header">
               <span id="editorFileName"><i class="fa-solid fa-code"></i> Select a file</span>
@@ -189,8 +203,18 @@
             <div class="ws-code-area" id="codeArea">
               <div class="ws-placeholder">
                 <i class="fa-solid fa-file-code"></i>
-                <p>Click a file in the explorer to view its source code</p>
+                <p>Click a file in the explorer, or click <strong>New File</strong> to create one</p>
               </div>
+            </div>
+            <!-- Edit mode textarea (hidden by default) -->
+            <textarea class="ws-edit-area" id="editArea" style="display:none" spellcheck="false" placeholder="Paste or write your Fortran MPI code here..."></textarea>
+            <!-- Inline error annotations panel -->
+            <div class="ws-fix-panel" id="fixPanel" style="display:none">
+              <div class="ws-panel-header">
+                <span><i class="fa-solid fa-wand-magic-sparkles"></i> Fix Suggestions</span>
+                <span id="fixCount" class="ws-fix-count"></span>
+              </div>
+              <div class="ws-fix-list" id="fixList"></div>
             </div>
           </div>
 
@@ -202,7 +226,33 @@
             </div>
             <pre class="ws-terminal-output" id="terminalOutput">Welcome to mpicheck interactive workspace.
 Select a file and click "Run Analysis" or "Run All Tests" to begin.
+
+Tip: Click "New File" to create your own Fortran file and test it!
 </pre>
+          </div>
+        </div>
+
+        <!-- New File Dialog (hidden by default) -->
+        <div class="ws-dialog-overlay" id="newFileDialog" style="display:none">
+          <div class="ws-dialog card-glass">
+            <h3><i class="fa-solid fa-file-circle-plus"></i> Create New File</h3>
+            <div class="ws-dialog-field">
+              <label>Filename</label>
+              <input type="text" id="newFileName" placeholder="my_test.f90" />
+            </div>
+            <div class="ws-dialog-field">
+              <label>Template</label>
+              <select id="newFileTemplate">
+                <option value="blank">Blank file</option>
+                <option value="mpi_basic">MPI Basic Program</option>
+                <option value="mpi_sendrecv">MPI Send/Recv</option>
+                <option value="mpi_collective">MPI Collective</option>
+              </select>
+            </div>
+            <div class="ws-dialog-actions">
+              <button id="btnCreateFile" class="btn-action primary">Create</button>
+              <button id="btnCancelNewFile" class="btn-action ghost">Cancel</button>
+            </div>
           </div>
         </div>
       </section>

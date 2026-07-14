@@ -1,6 +1,6 @@
 /* ================================================================
    mpicheck Dashboard — Interactive App
-   Page-based navigation + Workspace + Charts
+   Page navigation + Workspace + Create/Edit + Auto-Fix + Charts
    ================================================================ */
 
 // ── DOM refs ──────────────────────────────────────────────────────
@@ -15,6 +15,7 @@ const themeToggle     = document.getElementById('themeToggle');
 // Workspace DOM
 const fileTree        = document.getElementById('fileTree');
 const codeArea        = document.getElementById('codeArea');
+const editArea        = document.getElementById('editArea');
 const editorFileName  = document.getElementById('editorFileName');
 const editorFileInfo  = document.getElementById('editorFileInfo');
 const terminalOutput  = document.getElementById('terminalOutput');
@@ -23,11 +24,29 @@ const btnRunFile      = document.getElementById('btnRunFile');
 const btnRunTests     = document.getElementById('btnRunTests');
 const btnClearTerminal = document.getElementById('btnClearTerminal');
 const btnRefreshFiles = document.getElementById('btnRefreshFiles');
+const btnNewFile      = document.getElementById('btnNewFile');
+const btnEditMode     = document.getElementById('btnEditMode');
+const btnSaveFile     = document.getElementById('btnSaveFile');
+const btnAutoFix      = document.getElementById('btnAutoFix');
+const fixPanel        = document.getElementById('fixPanel');
+const fixList         = document.getElementById('fixList');
+const fixCount        = document.getElementById('fixCount');
+
+// Dialog DOM
+const newFileDialog   = document.getElementById('newFileDialog');
+const newFileName     = document.getElementById('newFileName');
+const newFileTemplate = document.getElementById('newFileTemplate');
+const btnCreateFile   = document.getElementById('btnCreateFile');
+const btnCancelNewFile = document.getElementById('btnCancelNewFile');
 
 let chartInstances = {};
 let currentFilePath = null;
+let currentFileContent = '';
+let currentFileEditable = false;
 let isRunning = false;
+let isEditing = false;
 let chartsRendered = false;
+let pendingFixes = [];
 
 
 // ================================================================
@@ -35,36 +54,23 @@ let chartsRendered = false;
 // ================================================================
 
 function navigateTo(pageId) {
-  // Hide all pages
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
-  // Show target
   const target = document.getElementById('page-' + pageId);
   if (target) target.classList.add('active');
-
-  // Update sidebar active state
   document.querySelectorAll('.sidebar-link[data-page]').forEach(link => {
     link.classList.toggle('active', link.dataset.page === pageId);
   });
-
-  // Scroll main content to top
   document.getElementById('mainContent').scrollTop = 0;
-
-  // Lazy-render charts when reports page is first shown
   if (pageId === 'reports' && !chartsRendered) {
     chartsRendered = true;
-    loadDashboard(); // re-trigger to ensure charts render in visible canvas
+    loadDashboard();
   }
 }
 
-// Sidebar navigation clicks
 document.querySelectorAll('.sidebar-link[data-page]').forEach(link => {
-  link.addEventListener('click', (e) => {
-    e.preventDefault();
-    navigateTo(link.dataset.page);
-  });
+  link.addEventListener('click', (e) => { e.preventDefault(); navigateTo(link.dataset.page); });
 });
 
-// Hero button navigation
 document.querySelectorAll('[data-navigate]').forEach(btn => {
   btn.addEventListener('click', () => navigateTo(btn.dataset.navigate));
 });
@@ -82,8 +88,7 @@ function bindThemeToggle() {
 function applyTheme(theme) {
   document.body.dataset.theme = theme;
   localStorage.setItem('theme', theme);
-  const icon = theme === 'dark' ? 'fa-sun' : 'fa-moon';
-  themeToggle.querySelector('i').className = 'fa-solid ' + icon;
+  themeToggle.querySelector('i').className = 'fa-solid ' + (theme === 'dark' ? 'fa-sun' : 'fa-moon');
 }
 
 themeToggle.addEventListener('click', () => {
@@ -128,6 +133,68 @@ const MPI_NAMES = [
 
 
 // ================================================================
+// FILE TEMPLATES
+// ================================================================
+
+const TEMPLATES = {
+  blank: '',
+  mpi_basic: `program mpi_hello
+  use mpi
+  implicit none
+  integer :: ierr, rank, size
+
+  call MPI_Init(ierr)
+  call MPI_Comm_rank(MPI_COMM_WORLD, rank, ierr)
+  call MPI_Comm_size(MPI_COMM_WORLD, size, ierr)
+
+  ! Your code here
+
+  call MPI_Finalize(ierr)
+end program
+`,
+  mpi_sendrecv: `program mpi_sendrecv
+  use mpi
+  implicit none
+  integer :: ierr, rank, size
+  real(8) :: buf(100)
+  integer :: status(MPI_STATUS_SIZE)
+
+  call MPI_Init(ierr)
+  call MPI_Comm_rank(MPI_COMM_WORLD, rank, ierr)
+  call MPI_Comm_size(MPI_COMM_WORLD, size, ierr)
+
+  if (rank == 0) then
+    buf = 42.0d0
+    call MPI_Send(buf, 100, MPI_DOUBLE_PRECISION, 1, 0, MPI_COMM_WORLD, ierr)
+  else if (rank == 1) then
+    call MPI_Recv(buf, 100, MPI_DOUBLE_PRECISION, 0, 0, MPI_COMM_WORLD, status, ierr)
+  end if
+
+  call MPI_Finalize(ierr)
+end program
+`,
+  mpi_collective: `program mpi_collective
+  use mpi
+  implicit none
+  integer :: ierr, rank, size
+  real(8) :: data(50), result(50)
+
+  call MPI_Init(ierr)
+  call MPI_Comm_rank(MPI_COMM_WORLD, rank, ierr)
+  call MPI_Comm_size(MPI_COMM_WORLD, size, ierr)
+
+  data = rank * 1.0d0
+
+  call MPI_Bcast(data, 50, MPI_DOUBLE_PRECISION, 0, MPI_COMM_WORLD, ierr)
+  call MPI_Allreduce(data, result, 50, MPI_DOUBLE_PRECISION, MPI_SUM, MPI_COMM_WORLD, ierr)
+
+  call MPI_Finalize(ierr)
+end program
+`,
+};
+
+
+// ================================================================
 // FILE EXPLORER
 // ================================================================
 
@@ -148,12 +215,15 @@ function renderFileTree(tree) {
     const el = document.createElement('div');
     el.className = 'ws-folder ws-fade-in';
 
+    const isWorkspace = folder.name === 'workspace';
+
     const header = document.createElement('div');
     header.className = 'ws-folder-header';
     header.innerHTML = `
       <span class="ws-chevron"><i class="fa-solid fa-chevron-down"></i></span>
-      <i class="fa-solid fa-folder" style="color:var(--ws-accent)"></i>
+      <i class="fa-solid ${isWorkspace ? 'fa-folder-open' : 'fa-folder'}" style="color:var(--ws-accent)"></i>
       <span>${folder.name}</span>
+      ${isWorkspace ? '<span class="ws-editable-badge" style="margin-left:0.3rem;font-size:0.58rem;background:rgba(52,211,153,0.15);color:#34d399;padding:0.05rem 0.3rem;border-radius:3px;font-weight:700">EDITABLE</span>' : ''}
       <span class="ws-folder-count">${folder.children.length}</span>
     `;
 
@@ -177,7 +247,7 @@ function renderFileTree(tree) {
         header.classList.remove('collapsed');
       } else {
         children.style.maxHeight = children.scrollHeight + 'px';
-        children.offsetHeight; // reflow
+        children.offsetHeight;
         children.classList.add('collapsed');
         header.classList.add('collapsed');
       }
@@ -194,10 +264,14 @@ function fmtBytes(b) { return b < 1024 ? b + ' B' : (b / 1024).toFixed(1) + ' KB
 
 
 // ================================================================
-// CODE VIEWER
+// CODE VIEWER / EDITOR
 // ================================================================
 
 async function openFile(filePath) {
+  // Exit edit mode if switching files
+  if (isEditing) exitEditMode();
+  hideFixes();
+
   document.querySelectorAll('.ws-file-item').forEach(el => el.classList.remove('active'));
   const active = document.querySelector(`.ws-file-item[data-path="${CSS.escape(filePath)}"]`);
   if (active) active.classList.add('active');
@@ -205,29 +279,48 @@ async function openFile(filePath) {
   editorFileName.innerHTML = `<i class="fa-solid fa-code"></i> ${filePath.split('/').pop()}`;
   editorFileInfo.textContent = 'Loading...';
   codeArea.innerHTML = '<div class="ws-loading"><i class="fa-solid fa-spinner fa-spin"></i> Loading...</div>';
+  codeArea.style.display = '';
+  editArea.style.display = 'none';
 
   try {
     const res = await fetch(`/api/file?path=${encodeURIComponent(filePath)}`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
     currentFilePath = filePath;
+    currentFileContent = data.content;
+    currentFileEditable = data.editable === true || data.editable === 'True';
     btnRunFile.disabled = false;
-    editorFileInfo.textContent = data.path;
+    btnEditMode.disabled = !currentFileEditable;
+    editorFileInfo.textContent = data.path + (currentFileEditable ? ' (editable)' : '');
     renderCode(data.content);
   } catch (err) {
     codeArea.innerHTML = '<div class="ws-loading" style="color:var(--ws-error)"><i class="fa-solid fa-circle-xmark"></i> Failed to load</div>';
   }
 }
 
-function renderCode(source, highlightLines = []) {
+function renderCode(source, annotations = []) {
   const lines = source.split('\n');
-  const hl = new Set(highlightLines);
+  const annMap = {};
+  annotations.forEach(a => { if (!annMap[a.line]) annMap[a.line] = []; annMap[a.line].push(a); });
+
   let html = '<table class="ws-code-table">';
   lines.forEach((line, i) => {
     const n = i + 1;
-    html += `<tr class="${hl.has(n) ? 'ws-line-highlighted' : ''}" id="ws-line-${n}">`;
+    const hasError = annMap[n] && annMap[n].some(a => a.severity === 'error');
+    const hasWarn = annMap[n] && annMap[n].some(a => a.severity === 'warning');
+    const hlClass = hasError ? 'ws-line-highlighted' : (hasWarn ? 'ws-line-warn' : '');
+    html += `<tr class="${hlClass}" id="ws-line-${n}">`;
     html += `<td class="ws-line-num">${n}</td>`;
     html += `<td class="ws-line-content">${highlightFortran(esc(line)) || ' '}</td></tr>`;
+
+    // Inline error annotations
+    if (annMap[n]) {
+      annMap[n].forEach(a => {
+        const cls = a.severity === 'error' ? 'error-ann' : 'warning-ann';
+        const icon = a.severity === 'error' ? 'fa-circle-exclamation' : 'fa-triangle-exclamation';
+        html += `<tr><td></td><td><div class="ws-error-annotation ${cls}"><i class="fa-solid ${icon}"></i> [${a.rule}] ${esc(a.message)}</div></td></tr>`;
+      });
+    }
   });
   html += '</table>';
   codeArea.innerHTML = html;
@@ -249,18 +342,406 @@ function highlightFortran(line) {
   let code = ci >= 0 ? line.substring(0, ci) : line;
   let comment = ci >= 0 ? `<span class="syn-comment">${line.substring(ci)}</span>` : '';
 
-  // strings
-  code = code.replace(/(["'])(?:(?!\1).)*\1/g, '<span class="syn-string">$&</span>');
-  // numbers
-  code = code.replace(/\b(\d+\.?\d*(?:[eEdD][+-]?\d+)?)\b/g, '<span class="syn-number">$1</span>');
-  // MPI
-  code = code.replace(new RegExp('\\b(' + MPI_NAMES.join('|') + ')\\b', 'gi'), '<span class="syn-mpi">$&</span>');
-  // keywords
-  code = code.replace(new RegExp('\\b(' + FORTRAN_KEYWORDS.join('|') + ')\\b', 'gi'), '<span class="syn-keyword">$&</span>');
-  // types
-  code = code.replace(new RegExp('\\b(' + FORTRAN_TYPES.join('|') + ')\\b', 'gi'), '<span class="syn-type">$&</span>');
+  // Tokenize the code part safely to avoid matching inside HTML tags
+  const tokenRegex = /("[^"]*"|'[^']*'|\b\d+\.?\d*(?:[eEdD][+-]?\d+)?\b|\b[a-zA-Z_]\w*\b|[^\w\s"'\d]+|\s+)/g;
+  let result = '';
+  let match;
+  while ((match = tokenRegex.exec(code)) !== null) {
+    let token = match[0];
+    let lower = token.toLowerCase();
 
-  return code + comment;
+    if (token.startsWith('"') || token.startsWith("'")) {
+      result += `<span class="syn-string">${token}</span>`;
+    } else if (/^\d/.test(token)) {
+      result += `<span class="syn-number">${token}</span>`;
+    } else if (MPI_NAMES.includes(lower)) {
+      result += `<span class="syn-mpi">${token}</span>`;
+    } else if (FORTRAN_KEYWORDS.includes(lower)) {
+      result += `<span class="syn-keyword">${token}</span>`;
+    } else if (FORTRAN_TYPES.includes(lower)) {
+      result += `<span class="syn-type">${token}</span>`;
+    } else {
+      result += token;
+    }
+  }
+
+  return result + comment;
+}
+
+
+// ================================================================
+// EDIT MODE
+// ================================================================
+
+function enterEditMode() {
+  if (!currentFilePath || !currentFileEditable) return;
+  isEditing = true;
+  codeArea.style.display = 'none';
+  editArea.style.display = '';
+  editArea.value = currentFileContent;
+  editArea.focus();
+  btnEditMode.style.display = 'none';
+  btnSaveFile.style.display = '';
+  editorFileName.innerHTML = `<i class="fa-solid fa-pen"></i> ${currentFilePath.split('/').pop()} <small style="opacity:0.5">(editing)</small>`;
+}
+
+function exitEditMode() {
+  isEditing = false;
+  editArea.style.display = 'none';
+  codeArea.style.display = '';
+  btnEditMode.style.display = '';
+  btnSaveFile.style.display = 'none';
+  if (currentFilePath) {
+    editorFileName.innerHTML = `<i class="fa-solid fa-code"></i> ${currentFilePath.split('/').pop()}`;
+  }
+}
+
+async function saveFile() {
+  if (!currentFilePath) return;
+  const content = editArea.value;
+  try {
+    const res = await fetch('/api/save-file', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: currentFilePath, content })
+    });
+    const data = await res.json();
+    if (data.ok) {
+      currentFileContent = content;
+      termWriteLine(`<span class="term-success"><i class="fa-solid fa-check"></i> Saved ${currentFilePath}</span>`);
+      exitEditMode();
+      renderCode(content);
+    } else {
+      termWriteLine(`<span class="term-error">Save failed: ${esc(data.error || 'Unknown error')}</span>`);
+    }
+  } catch (err) {
+    termWriteLine(`<span class="term-error">Save error: ${esc(err.message)}</span>`);
+  }
+}
+
+
+// ================================================================
+// NEW FILE
+// ================================================================
+
+function showNewFileDialog() {
+  newFileDialog.style.display = '';
+  newFileName.value = '';
+  newFileName.focus();
+}
+
+function hideNewFileDialog() {
+  newFileDialog.style.display = 'none';
+}
+
+async function createFile() {
+  const name = newFileName.value.trim();
+  if (!name) { newFileName.focus(); return; }
+
+  const template = TEMPLATES[newFileTemplate.value] || '';
+
+  try {
+    const res = await fetch('/api/create-file', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, content: template })
+    });
+    const data = await res.json();
+    if (data.ok) {
+      hideNewFileDialog();
+      termWriteLine(`<span class="term-success"><i class="fa-solid fa-check"></i> Created ${data.path}</span>`);
+      await loadFileTree();
+      await openFile(data.path);
+      // Auto-enter edit mode for new files
+      enterEditMode();
+    } else {
+      termWriteLine(`<span class="term-error">Create failed: ${esc(data.error || 'Unknown error')}</span>`);
+    }
+  } catch (err) {
+    termWriteLine(`<span class="term-error">Create error: ${esc(err.message)}</span>`);
+  }
+}
+
+
+// ================================================================
+// AUTO-FIX ENGINE
+// ================================================================
+
+function parseAnalysisOutput(output) {
+  const annotations = [];
+  const regex = /:(\d+): (error|warning): \[([^\]]+)\]\s*(.+)/g;
+  let match;
+  while ((match = regex.exec(output)) !== null) {
+    annotations.push({
+      line: parseInt(match[1]),
+      severity: match[2],
+      rule: match[3],
+      message: match[4],
+    });
+  }
+  return annotations;
+}
+
+function generateFixes(annotations, sourceCode) {
+  const lines = sourceCode.split('\n');
+  const fixes = [];
+
+  for (const ann of annotations) {
+    const lineIdx = ann.line - 1;
+    const codeLine = lines[lineIdx] || '';
+
+    switch (ann.rule) {
+      case 'datatype-mismatch': {
+        // REAL(8) with MPI_REAL -> MPI_DOUBLE_PRECISION
+        if (/REAL\(8\)/i.test(ann.message) && /MPI_REAL\b/i.test(ann.message) && /MPI_REAL\b/i.test(codeLine)) {
+          fixes.push({ ...ann, fixDesc: 'Change MPI_REAL to MPI_DOUBLE_PRECISION', find: /\bMPI_REAL\b/i, replace: 'MPI_DOUBLE_PRECISION', lineIdx });
+        }
+        // REAL(4) with MPI_DOUBLE_PRECISION -> MPI_REAL
+        else if (/REAL\(4\)/i.test(ann.message) && /MPI_DOUBLE_PRECISION/i.test(codeLine)) {
+          fixes.push({ ...ann, fixDesc: 'Change MPI_DOUBLE_PRECISION to MPI_REAL', find: /\bMPI_DOUBLE_PRECISION\b/i, replace: 'MPI_REAL', lineIdx });
+        }
+        // INTEGER(8) with MPI_INTEGER -> use correct type
+        else if (/INTEGER\(8\)/i.test(ann.message) && /MPI_INTEGER\b/i.test(codeLine)) {
+          fixes.push({ ...ann, fixDesc: 'Change MPI_INTEGER to MPI_INTEGER8', find: /\bMPI_INTEGER\b/i, replace: 'MPI_INTEGER8', lineIdx });
+        }
+        // INTEGER(2) with MPI_INTEGER
+        else if (/INTEGER\(2\)/i.test(ann.message) && /MPI_INTEGER\b/i.test(codeLine)) {
+          fixes.push({ ...ann, fixDesc: 'Change MPI_INTEGER to MPI_INTEGER2', find: /\bMPI_INTEGER\b/i, replace: 'MPI_INTEGER2', lineIdx });
+        }
+        // COMPLEX kind mismatch
+        else if (/COMPLEX\(8\)/i.test(ann.message) && /MPI_COMPLEX\b/i.test(codeLine)) {
+          fixes.push({ ...ann, fixDesc: 'Change MPI_COMPLEX to MPI_DOUBLE_COMPLEX', find: /\bMPI_COMPLEX\b/i, replace: 'MPI_DOUBLE_COMPLEX', lineIdx });
+        }
+        // LOGICAL kind mismatch
+        else if (/LOGICAL/i.test(ann.message) && /MPI_LOGICAL\b/i.test(codeLine)) {
+          fixes.push({ ...ann, fixDesc: 'Change MPI_LOGICAL to MPI_BYTE', find: /\bMPI_LOGICAL\b/i, replace: 'MPI_BYTE', lineIdx });
+        }
+        // Generic fallback
+        else {
+          fixes.push({ ...ann, fixDesc: 'Fix MPI datatype to match buffer kind', find: null, replace: null, lineIdx });
+        }
+        break;
+      }
+
+      case 'derived-type-layout': {
+        // Need to add BIND(C) to the type definition
+        if (/not BIND\(C\)/i.test(ann.message)) {
+          // Find the TYPE definition line above
+          const typeMatch = ann.message.match(/TYPE\((\w+)\)/i);
+          if (typeMatch) {
+            const typeName = typeMatch[1];
+            for (let i = 0; i < lines.length; i++) {
+              if (new RegExp(`^\\s*type\\s+${typeName}\\s*$`, 'i').test(lines[i])) {
+                fixes.push({ ...ann, fixDesc: `Add BIND(C) to TYPE(${typeName})`, find: new RegExp(`(type\\s+)(${typeName})`, 'i'), replace: `$1${typeName}, BIND(C)`, lineIdx: i, line: i + 1 });
+                break;
+              }
+            }
+          }
+        }
+        break;
+      }
+
+      case 'collective-ordering': {
+        // Move the collective outside the IF block
+        fixes.push({ ...ann, fixDesc: 'Move collective call outside rank-conditional IF block', find: null, replace: null, lineIdx, isBlockFix: true });
+        break;
+      }
+
+      case 'contiguity': {
+        // Add CONTIGUOUS attribute
+        if (/assumed.shape/i.test(ann.message) || /CONTIGUOUS/i.test(ann.message)) {
+          fixes.push({ ...ann, fixDesc: 'Add CONTIGUOUS attribute to array declaration', find: null, replace: null, lineIdx });
+        } else {
+          fixes.push({ ...ann, fixDesc: 'Use contiguous array section or add CONTIGUOUS', find: null, replace: null, lineIdx });
+        }
+        break;
+      }
+
+      case 'optional-arg': {
+        // Wrap in IF (PRESENT(...)) THEN
+        const argMatch = ann.message.match(/buffer '(\w+)'/i) || ann.message.match(/'(\w+)'/i);
+        if (argMatch) {
+          fixes.push({ ...ann, fixDesc: `Wrap in IF (PRESENT(${argMatch[1]})) guard`, find: null, replace: null, lineIdx, isWrapFix: true, argName: argMatch[1] });
+        }
+        break;
+      }
+
+      case 'buffer-size': {
+        const countMatch = ann.message.match(/count\s*\((\d+)\)\s*>\s*.*extent\s*\((\d+)\)/i);
+        if (countMatch) {
+          fixes.push({ ...ann, fixDesc: `Change count from ${countMatch[1]} to ${countMatch[2]}`, find: new RegExp(`\\b${countMatch[1]}\\b`), replace: countMatch[2], lineIdx });
+        } else {
+          fixes.push({ ...ann, fixDesc: 'Fix buffer count to match array extent', find: null, replace: null, lineIdx });
+        }
+        break;
+      }
+
+      case 'handle-leak': {
+        const handleMatch = ann.message.match(/MPI_(\w+)\b/i);
+        const nameMatch = ann.message.match(/'(\w+)'/);
+        if (handleMatch && nameMatch) {
+          const hType = handleMatch[1].toLowerCase();
+          let freeCall = '';
+          if (hType.includes('datatype') || hType.includes('type')) freeCall = `call MPI_Type_free(${nameMatch[1]}, ierr)`;
+          else if (hType.includes('comm')) freeCall = `call MPI_Comm_free(${nameMatch[1]}, ierr)`;
+          else if (hType.includes('group')) freeCall = `call MPI_Group_free(${nameMatch[1]}, ierr)`;
+          else if (hType.includes('win')) freeCall = `call MPI_Win_free(${nameMatch[1]}, ierr)`;
+          else freeCall = `! TODO: Free handle '${nameMatch[1]}'`;
+          fixes.push({ ...ann, fixDesc: `Add ${freeCall}`, find: null, replace: null, lineIdx, isInsertFix: true, insertCode: '  ' + freeCall });
+        }
+        break;
+      }
+
+      case 'isend-aliasing': {
+        fixes.push({ ...ann, fixDesc: 'Do not modify buffer between MPI_Isend and MPI_Wait', find: null, replace: null, lineIdx });
+        break;
+      }
+
+      case 'datatype-state': {
+        if (/without commit/i.test(ann.message)) {
+          const dtMatch = ann.message.match(/'(\w+)'/);
+          if (dtMatch) {
+            fixes.push({ ...ann, fixDesc: `Add MPI_Type_commit(${dtMatch[1]}) before use`, find: null, replace: null, lineIdx, isInsertFix: true, insertCode: `  call MPI_Type_commit(${dtMatch[1]}, ierr)` });
+          }
+        } else if (/after free/i.test(ann.message)) {
+          fixes.push({ ...ann, fixDesc: 'Remove usage of datatype after MPI_Type_free', find: null, replace: null, lineIdx });
+        }
+        break;
+      }
+
+      case 'deadlock-pattern': {
+        fixes.push({ ...ann, fixDesc: 'Reorder Send/Recv to avoid deadlock risk', find: null, replace: null, lineIdx });
+        break;
+      }
+
+      default:
+        fixes.push({ ...ann, fixDesc: `Review and fix [${ann.rule}]`, find: null, replace: null, lineIdx });
+    }
+  }
+
+  return fixes;
+}
+
+function showFixes(fixes) {
+  if (fixes.length === 0) { hideFixes(); return; }
+  pendingFixes = fixes;
+  fixPanel.style.display = '';
+  fixCount.textContent = `${fixes.length} fix${fixes.length > 1 ? 'es' : ''}`;
+  btnAutoFix.style.display = '';
+
+  fixList.innerHTML = fixes.map((f, i) => `
+    <div class="ws-fix-item">
+      <span class="fix-icon ${f.severity}"><i class="fa-solid ${f.severity === 'error' ? 'fa-circle-exclamation' : 'fa-triangle-exclamation'}"></i></span>
+      <span class="fix-line">L${f.line}</span>
+      <span class="fix-desc">
+        <strong>[${f.rule}]</strong> ${esc(f.fixDesc)}
+        ${f.find && f.replace !== null ? `<br><span class="fix-old">${esc(String(f.find).replace(/^\/|\/[gi]*$/g,''))}</span> <span class="fix-arrow"><i class="fa-solid fa-arrow-right"></i></span> <span class="fix-new">${esc(typeof f.replace === 'string' ? f.replace : '')}</span>` : ''}
+      </span>
+    </div>
+  `).join('');
+}
+
+function hideFixes() {
+  fixPanel.style.display = 'none';
+  btnAutoFix.style.display = 'none';
+  pendingFixes = [];
+}
+
+async function applyFixes() {
+  if (pendingFixes.length === 0) return;
+
+  let lines = currentFileContent.split('\n');
+  let applied = 0;
+  const insertions = []; // {afterLineIdx, code}
+
+  // Sort fixes by line number descending so insertions don't shift indices
+  const sorted = [...pendingFixes].sort((a, b) => (b.lineIdx || 0) - (a.lineIdx || 0));
+
+  for (const fix of sorted) {
+    const lineIdx = fix.lineIdx;
+
+    if (fix.isBlockFix) {
+      // Collective ordering: move the call outside the IF block
+      // Find the IF line above and END IF below
+      let ifLine = -1, endIfLine = -1;
+      for (let i = lineIdx - 1; i >= 0; i--) {
+        if (/^\s*if\s*\(.+\)\s*then\s*$/i.test(lines[i])) { ifLine = i; break; }
+      }
+      for (let i = lineIdx + 1; i < lines.length; i++) {
+        if (/^\s*end\s*if\s*$/i.test(lines[i])) { endIfLine = i; break; }
+      }
+      if (ifLine >= 0 && endIfLine >= 0) {
+        const callLine = lines[lineIdx];
+        // Remove the call, IF, and END IF
+        lines.splice(endIfLine, 1);
+        lines.splice(lineIdx, 1);
+        lines.splice(ifLine, 1);
+        // Re-insert the call at the ifLine position (outside the block)
+        lines.splice(ifLine, 0, callLine);
+        applied++;
+      }
+      continue;
+    }
+
+    if (fix.isWrapFix && fix.argName) {
+      // Wrap line in IF (PRESENT(arg)) THEN ... END IF
+      const indent = lines[lineIdx].match(/^(\s*)/)[1];
+      lines[lineIdx] = `${indent}if (present(${fix.argName})) then\n${indent}  ${lines[lineIdx].trim()}\n${indent}end if`;
+      applied++;
+      continue;
+    }
+
+    if (fix.isInsertFix && fix.insertCode) {
+      // Insert a line before the current line (e.g., MPI_Type_commit before use)
+      // For handle-leak: insert before MPI_Finalize
+      let insertIdx = lineIdx;
+      for (let i = lines.length - 1; i >= 0; i--) {
+        if (/MPI_Finalize/i.test(lines[i])) { insertIdx = i; break; }
+      }
+      lines.splice(insertIdx, 0, fix.insertCode);
+      applied++;
+      continue;
+    }
+
+    if (fix.find && fix.replace !== null) {
+      const oldLine = lines[lineIdx];
+      const newLine = oldLine.replace(fix.find, fix.replace);
+      if (newLine !== oldLine) {
+        lines[lineIdx] = newLine;
+        applied++;
+      }
+    }
+  }
+
+  if (applied === 0) {
+    termWriteLine(`<span class="term-warning">No automatic fixes could be applied. Manual review needed.</span>`);
+    return;
+  }
+
+  const fixedContent = lines.join('\n');
+  currentFileContent = fixedContent;
+
+  // If the file is in workspace/, save it
+  if (currentFileEditable) {
+    try {
+      await fetch('/api/save-file', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: currentFilePath, content: fixedContent })
+      });
+    } catch (e) { /* best effort */ }
+  }
+
+  termWriteLine(`<span class="term-success"><i class="fa-solid fa-wand-magic-sparkles"></i> Applied ${applied} fix${applied > 1 ? 'es' : ''}! Re-run analysis to verify.</span>`);
+  hideFixes();
+  renderCode(fixedContent);
+
+  // Scroll to first fix
+  const firstLine = sorted[sorted.length - 1]?.line;
+  if (firstLine) {
+    const el = document.getElementById(`ws-line-${firstLine}`);
+    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }
 }
 
 
@@ -277,6 +758,7 @@ async function runAnalysis() {
   if (!currentFilePath || isRunning) return;
   isRunning = true;
   btnRunFile.disabled = btnRunTests.disabled = true;
+  hideFixes();
 
   termWriteLine(`<span class="term-prompt">$ </span><span class="term-bold">mpicheck ${currentFilePath}</span>`);
   setStatus('Running...', 'running ws-running-indicator');
@@ -290,18 +772,37 @@ async function runAnalysis() {
     } else {
       const out = data.stdout || data.stderr || '';
       if (out.trim()) termWrite(colorize(esc(out)));
-      const lines = [...out.matchAll(/:(\d+): (error|warning):/g)].map(m => parseInt(m[1]));
-      if (lines.length && currentFilePath === data.file) {
-        const fr = await fetch(`/api/file?path=${encodeURIComponent(currentFilePath)}`);
-        renderCode((await fr.json()).content, lines);
-        const el = document.getElementById(`ws-line-${lines[0]}`);
-        if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+
+      // Parse annotations from output
+      const annotations = parseAnalysisOutput(out);
+
+      // Re-render code with inline annotations
+      if (currentFilePath) {
+        // Re-fetch latest content (in case auto-fix changed it)
+        try {
+          const fr = await fetch(`/api/file?path=${encodeURIComponent(currentFilePath)}`);
+          const fd = await fr.json();
+          currentFileContent = fd.content;
+        } catch (e) { /* use cached */ }
+
+        renderCode(currentFileContent, annotations);
+
+        // Scroll to first error
+        if (annotations.length > 0) {
+          const el = document.getElementById(`ws-line-${annotations[0].line}`);
+          if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
       }
+
       if (data.exitCode === 0) {
-        termWriteLine(`<span class="term-success">No issues found</span>`);
+        termWriteLine(`<span class="term-success"><i class="fa-solid fa-circle-check"></i> No issues found - clean code!</span>`);
         setStatus('Clean', 'done');
       } else {
-        setStatus(`${lines.length} issue(s)`, 'error');
+        setStatus(`${annotations.length} issue(s)`, 'error');
+
+        // Generate fix suggestions
+        const fixes = generateFixes(annotations, currentFileContent);
+        showFixes(fixes);
       }
     }
   } catch (err) {
@@ -466,7 +967,6 @@ function renderDiagnostics(items) {
 
 function renderCharts(charts) {
   const colors = ['#7a4330', '#a65f35', '#c9885a', '#e8a164', '#1cae72', '#60a5fa'];
-
   Object.values(chartInstances).forEach(c => c.destroy());
   chartInstances = {};
 
@@ -587,10 +1087,21 @@ function getFallbackData() {
 // INIT
 // ================================================================
 
+// Workspace buttons
 btnRunFile.addEventListener('click', runAnalysis);
 btnRunTests.addEventListener('click', runAllTests);
 btnClearTerminal.addEventListener('click', () => { termClear(); setStatus('', ''); });
 btnRefreshFiles.addEventListener('click', loadFileTree);
+btnEditMode.addEventListener('click', enterEditMode);
+btnSaveFile.addEventListener('click', saveFile);
+btnAutoFix.addEventListener('click', applyFixes);
+
+// New file dialog
+btnNewFile.addEventListener('click', () => { navigateTo('workspace'); showNewFileDialog(); });
+btnCreateFile.addEventListener('click', createFile);
+btnCancelNewFile.addEventListener('click', hideNewFileDialog);
+newFileName.addEventListener('keydown', (e) => { if (e.key === 'Enter') createFile(); });
+newFileDialog.addEventListener('click', (e) => { if (e.target === newFileDialog) hideNewFileDialog(); });
 
 bindThemeToggle();
 loadDashboard();
