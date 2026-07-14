@@ -548,9 +548,47 @@ function generateFixes(annotations, sourceCode) {
       }
 
       case 'contiguity': {
-        // Add CONTIGUOUS attribute
-        if (/assumed.shape/i.test(ann.message) || /CONTIGUOUS/i.test(ann.message)) {
-          fixes.push({ ...ann, fixDesc: 'Add CONTIGUOUS attribute to array declaration', find: null, replace: null, lineIdx });
+        // Two sub-cases:
+        // 1) Strided array section like a(1:99:2) -> use a temp copy
+        // 2) Assumed-shape buf(:) -> add CONTIGUOUS attribute
+        if (/non-unit stride/i.test(ann.message) || /array section/i.test(ann.message)) {
+          // Parse the argument name and the section from the code line
+          const callMatch = codeLine.match(/call\s+\w+\(([^,]+)/i);
+          const argExpr = callMatch ? callMatch[1].trim() : null;
+          if (argExpr && /\(.*:.*:/.test(argExpr)) {
+            // e.g. a(1:99:2) -> replace with a contiguous temp
+            const argName = argExpr.match(/^(\w+)/)[1];
+            fixes.push({
+              ...ann,
+              fixDesc: `Replace strided section with contiguous copy via PACK()`,
+              lineIdx,
+              isStrideFix: true,
+              origExpr: argExpr,
+              argName: argName,
+            });
+          } else {
+            fixes.push({ ...ann, fixDesc: 'Replace strided array section with contiguous copy', find: null, replace: null, lineIdx });
+          }
+        } else if (/assumed.shape/i.test(ann.message)) {
+          // Find the declaration of the buffer and add CONTIGUOUS
+          const bufMatch = ann.message.match(/argument '(\w+)'/i) || ann.message.match(/'(\w+)'/i);
+          if (bufMatch) {
+            const bufName = bufMatch[1];
+            for (let i = 0; i < lines.length; i++) {
+              // Match declaration like: real, intent(in) :: buf(:)
+              const declRe = new RegExp(`^(\\s*\\w[\\w()*,\\s]*::\\s*)${bufName}\\b`, 'i');
+              if (declRe.test(lines[i]) && !(/contiguous/i.test(lines[i]))) {
+                fixes.push({
+                  ...ann,
+                  fixDesc: `Add CONTIGUOUS attribute to '${bufName}' declaration`,
+                  lineIdx: i, line: i + 1,
+                  isContiguousFix: true,
+                  bufName: bufName,
+                });
+                break;
+              }
+            }
+          }
         } else {
           fixes.push({ ...ann, fixDesc: 'Use contiguous array section or add CONTIGUOUS', find: null, replace: null, lineIdx });
         }
@@ -567,11 +605,19 @@ function generateFixes(annotations, sourceCode) {
       }
 
       case 'buffer-size': {
+        // Try to parse count > extent from message
         const countMatch = ann.message.match(/count\s*\((\d+)\)\s*>\s*.*extent\s*\((\d+)\)/i);
         if (countMatch) {
           fixes.push({ ...ann, fixDesc: `Change count from ${countMatch[1]} to ${countMatch[2]}`, find: new RegExp(`\\b${countMatch[1]}\\b`), replace: countMatch[2], lineIdx });
         } else {
-          fixes.push({ ...ann, fixDesc: 'Fix buffer count to match array extent', find: null, replace: null, lineIdx });
+          // Fallback: try to find the count number on the line
+          const msgCount = ann.message.match(/count\s*[\(=]\s*(\d+)/i);
+          const msgExtent = ann.message.match(/extent\s*[\(=]\s*(\d+)/i);
+          if (msgCount && msgExtent) {
+            fixes.push({ ...ann, fixDesc: `Change count from ${msgCount[1]} to ${msgExtent[1]}`, find: new RegExp(`\\b${msgCount[1]}\\b`), replace: msgExtent[1], lineIdx });
+          } else {
+            fixes.push({ ...ann, fixDesc: 'Fix buffer count to match array extent', find: null, replace: null, lineIdx });
+          }
         }
         break;
       }
@@ -593,7 +639,19 @@ function generateFixes(annotations, sourceCode) {
       }
 
       case 'isend-aliasing': {
-        fixes.push({ ...ann, fixDesc: 'Do not modify buffer between MPI_Isend and MPI_Wait', find: null, replace: null, lineIdx });
+        // Add a buffer copy to avoid aliasing
+        const bufMatch = ann.message.match(/buffer '(\w+)'/i) || ann.message.match(/'(\w+)'/i);
+        if (bufMatch) {
+          fixes.push({
+            ...ann,
+            fixDesc: `Use a separate send buffer copy to avoid aliasing '${bufMatch[1]}'`,
+            lineIdx,
+            isAliasFix: true,
+            bufName: bufMatch[1],
+          });
+        } else {
+          fixes.push({ ...ann, fixDesc: 'Use separate buffer copy between MPI_Isend and MPI_Wait', find: null, replace: null, lineIdx });
+        }
         break;
       }
 
@@ -610,7 +668,12 @@ function generateFixes(annotations, sourceCode) {
       }
 
       case 'deadlock-pattern': {
-        fixes.push({ ...ann, fixDesc: 'Reorder Send/Recv to avoid deadlock risk', find: null, replace: null, lineIdx });
+        // Change matching Send/Recv ordering — swap one MPI_Send to MPI_Sendrecv or reorder
+        if (/MPI_Send/i.test(codeLine)) {
+          fixes.push({ ...ann, fixDesc: 'Change MPI_Send to MPI_Ssend to make deadlock explicit (then reorder)', find: /\bMPI_Send\b/i, replace: 'MPI_Ssend', lineIdx });
+        } else {
+          fixes.push({ ...ann, fixDesc: 'Reorder Send/Recv to break deadlock cycle', find: null, replace: null, lineIdx });
+        }
         break;
       }
 
@@ -703,6 +766,45 @@ async function applyFixes() {
       continue;
     }
 
+    if (fix.isStrideFix && fix.origExpr) {
+      // Replace strided section with PACK(): a(1:99:2) -> pack(a(1:99:2), .true.)
+      const indent = lines[lineIdx].match(/^(\s*)/)[1];
+      const tempName = fix.argName + '_contig';
+      // Replace the strided expression with the temp variable in the MPI call
+      const newCall = lines[lineIdx].replace(fix.origExpr, tempName);
+      // Insert allocation + pack before the call
+      lines.splice(lineIdx, 1,
+        `${indent}${tempName} = pack(${fix.origExpr}, .true.)`,
+        newCall
+      );
+      applied++;
+      continue;
+    }
+
+    if (fix.isContiguousFix && fix.bufName) {
+      // Add CONTIGUOUS to declaration: "real, intent(in) :: buf(:)" -> "real, intent(in), contiguous :: buf(:)"
+      const declLine = lines[lineIdx];
+      const newDecl = declLine.replace(/::/i, ', contiguous ::');
+      if (newDecl !== declLine) {
+        lines[lineIdx] = newDecl;
+        applied++;
+      }
+      continue;
+    }
+
+    if (fix.isAliasFix && fix.bufName) {
+      // Add a buffer copy before the Isend: sendbuf = buf; call MPI_Isend(sendbuf, ...)
+      const indent = lines[lineIdx].match(/^(\s*)/)[1];
+      const copyName = fix.bufName + '_sendbuf';
+      const newCall = lines[lineIdx].replace(new RegExp(`\\b${fix.bufName}\\b`, 'i'), copyName);
+      lines.splice(lineIdx, 1,
+        `${indent}${copyName} = ${fix.bufName}  ! contiguous copy for non-blocking send`,
+        newCall
+      );
+      applied++;
+      continue;
+    }
+
     if (fix.find && fix.replace !== null) {
       const oldLine = lines[lineIdx];
       const newLine = oldLine.replace(fix.find, fix.replace);
@@ -721,18 +823,54 @@ async function applyFixes() {
   const fixedContent = lines.join('\n');
   currentFileContent = fixedContent;
 
-  // If the file is in workspace/, save it
   if (currentFileEditable) {
+    // Editable workspace file — save in-place
     try {
       await fetch('/api/save-file', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ path: currentFilePath, content: fixedContent })
       });
-    } catch (e) { /* best effort */ }
+      termWriteLine(`<span class="term-success"><i class="fa-solid fa-wand-magic-sparkles"></i> Applied ${applied} fix${applied > 1 ? 'es' : ''}! Re-run analysis to verify.</span>`);
+    } catch (e) {
+      termWriteLine(`<span class="term-warning">Fixes applied in preview but save failed.</span>`);
+    }
+  } else {
+    // Read-only file (tests/bugs/, tests/clean/, eval/) — copy fixed version to workspace/
+    const origName = currentFilePath.split('/').pop();
+    const fixedName = origName.replace('.f90', '_fixed.f90');
+    try {
+      const res = await fetch('/api/create-file', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: fixedName, content: fixedContent })
+      });
+      const data = await res.json();
+      if (data.ok) {
+        termWriteLine(`<span class="term-success"><i class="fa-solid fa-wand-magic-sparkles"></i> Applied ${applied} fix${applied > 1 ? 'es' : ''}! Saved as <strong>${data.path}</strong></span>`);
+        termWriteLine(`<span class="term-info">Switching to fixed file — click Run Analysis to verify the fix.</span>`);
+        await loadFileTree();
+        await openFile(data.path);
+      } else if (res.status === 409) {
+        // File already exists — overwrite via save
+        const savePath = 'workspace/' + fixedName;
+        await fetch('/api/save-file', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ path: savePath, content: fixedContent })
+        });
+        termWriteLine(`<span class="term-success"><i class="fa-solid fa-wand-magic-sparkles"></i> Applied ${applied} fix${applied > 1 ? 'es' : ''}! Updated <strong>${savePath}</strong></span>`);
+        termWriteLine(`<span class="term-info">Switching to fixed file — click Run Analysis to verify the fix.</span>`);
+        await loadFileTree();
+        await openFile(savePath);
+      } else {
+        termWriteLine(`<span class="term-warning">Fixes applied in preview. Could not save: ${esc(data.error || 'Unknown error')}</span>`);
+      }
+    } catch (e) {
+      termWriteLine(`<span class="term-warning">Fixes applied in preview only (file is read-only).</span>`);
+    }
   }
 
-  termWriteLine(`<span class="term-success"><i class="fa-solid fa-wand-magic-sparkles"></i> Applied ${applied} fix${applied > 1 ? 'es' : ''}! Re-run analysis to verify.</span>`);
   hideFixes();
   renderCode(fixedContent);
 
